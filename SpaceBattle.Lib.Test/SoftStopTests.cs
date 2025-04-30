@@ -58,20 +58,6 @@ public class SoftStopTests
         }
         ).Execute();
 
-        IoC.Resolve<Hwdtech.ICommand>("IoC.Register", "Threading.HardStop", (object[] args) => 
-        {
-            Action task = new Action(() => {});
-            if (args.Length == 2)
-            {
-                task = (Action)args[1];
-            }
-            return new HardStopThreadCommand(
-            IoC.Resolve<Dictionary<int, (ServerThread, SenderAdapter)>>("Threading.ServerThreads")[(int)args[0]].Item1,
-            task,
-            IoC.Resolve<Dictionary<int, (ServerThread, SenderAdapter)>>("Threading.ServerThreads")[(int)args[0]].Item2);
-        }
-        ).Execute();
-
         IoC.Resolve<Hwdtech.ICommand>("IoC.Register", "Threading.SoftStop", (object[] args) => 
         {
             Action task = new Action(() => {});
@@ -90,37 +76,31 @@ public class SoftStopTests
     [Fact]
     public void successfulSoftStop()
     {
-        AutoResetEvent waiter = new AutoResetEvent(false);
+        var waiter = new ManualResetEventSlim(false);
+        var commandsFinished = new ManualResetEventSlim(false);
 
-        var objToMove = new Mock<IMovable>();
-        objToMove.SetupProperty(x => x.position);
-        objToMove.SetupGet(x => x.speed).Returns(new Vector(-7, 3));
-        objToMove.Object.position = new Vector(12, 5);
-        
-        var cmd = new MoveCommand(objToMove.Object);
-        
-        IoC.Resolve<ICommand>("Threading.CreateAndStartThread", 2, new Action(
+        var cmd = IoC.Resolve<ICommand>("Commands.ActionCommand", new Action(
             () =>
             {
-                IoC.Resolve<Hwdtech.ICommand>("Scopes.Current.Set", scope).Execute();
-            }
-        )).Execute();
-
-        ICommand softStop = IoC.Resolve<ICommand>("Threading.SoftStop", 2, new Action(
-            () =>
-            {
+                Thread.Sleep(100);
                 waiter.Set();
             }
         ));
 
-        var releaseThread = new ActionCommand(
-            () =>
-            {
-                waiter.Set();
-            }
-        );
+        // Create and start the thread
+        IoC.Resolve<ICommand>("Threading.CreateAndStartThread", 2, new Action(() =>
+        {
+            IoC.Resolve<Hwdtech.ICommand>("Scopes.Current.Set", scope).Execute();
+        })).Execute();
 
-        var thread0 = IoC.Resolve<Dictionary<int, (ServerThread, SenderAdapter)>>("Threading.ServerThreads")[2].Item1;
+        // Wait for thread to be ready
+        Thread.Sleep(100);
+
+        var thread = IoC.Resolve<Dictionary<int, (ServerThread, SenderAdapter)>>("Threading.ServerThreads")[2].Item1;
+        var softStop = new SoftStopThreadCommand(
+            thread,
+            new Action(() => commandsFinished.Set())
+        );
 
         IoC.Resolve<ICommand>("Threading.SendCommand", 2, cmd).Execute();
         IoC.Resolve<ICommand>("Threading.SendCommand", 2, cmd).Execute();
@@ -129,9 +109,10 @@ public class SoftStopTests
         IoC.Resolve<ICommand>("Threading.SendCommand", 2, cmd).Execute();
         IoC.Resolve<ICommand>("Threading.SendCommand", 2, cmd).Execute();
 
-        var threadReceiver = IoC.Resolve<Dictionary<int, (ServerThread, SenderAdapter)>>("Threading.ServerThreads")[2].Item1.queue;
+        var threadReceiver = thread.queue;
 
-        waiter.WaitOne();
+        waiter.Wait();
+        commandsFinished.Wait(1000);
         
         Assert.True(threadReceiver.isEmpty());
     }

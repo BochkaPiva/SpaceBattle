@@ -1,11 +1,12 @@
 using Hwdtech;
 
-
 namespace SpaceBattle.Lib;
+
 public class SoftStopThreadCommand : ICommand
 {
-    ServerThread stoppingThread;
-    Action finishingTask;
+    private readonly ServerThread stoppingThread;
+    private readonly Action finishingTask;
+
     public SoftStopThreadCommand(ServerThread stoppingThread, Action finishingTask)
     {
         this.stoppingThread = stoppingThread;
@@ -14,19 +15,27 @@ public class SoftStopThreadCommand : ICommand
     
     public void Execute()
     {
-        Action softStopStrategy = () => 
+        stoppingThread._updateFinishingBehaviour(finishingTask);
+        
+        while (!stoppingThread.queue.isEmpty())
         {
-            if (stoppingThread.queue.isEmpty())
+            try
             {
-                int threadId = IoC.Resolve<int>("Threading.GetThreadId", this.stoppingThread);
-                ICommand hardStopThread = IoC.Resolve<ICommand>("Threading.HardStop", threadId, this.finishingTask);
-                IoC.Resolve<ICommand>("Threading.SendCommand", threadId, hardStopThread).Execute();
+                stoppingThread.queue.Receive();
             }
-            else
+            catch { }
+        }
+        
+        stoppingThread._stop();
+
+        var startTime = DateTime.UtcNow;
+        while (stoppingThread.IsRunning)
+        {
+            if ((DateTime.UtcNow - startTime).TotalSeconds > 3)
             {
-                stoppingThread._handleCommand();
+                throw new TimeoutException("Thread did not stop within timeout");
             }
-        };
-        new UpdateBehaviourCommand(stoppingThread, softStopStrategy).Execute();
+            Thread.Sleep(10);
+        }
     }
 }
