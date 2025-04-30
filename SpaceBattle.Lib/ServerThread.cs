@@ -1,49 +1,86 @@
 namespace SpaceBattle.Lib;
+
 public class ServerThread
 {
     public Thread thread { get; private set; }
     public ReceiverAdapter queue { get; private set; }
-    bool stop = false;
-    Action strategy;
-    Action finishingStrategy;
+    private volatile bool stop = false;
+    private Action strategy;
+    private Action finishingStrategy;
+    private readonly object lockObject = new object();
+
+    public bool IsRunning => !stop;
+
     public ServerThread(ReceiverAdapter queue)
     {
         this.queue = queue;
-        strategy = () =>
-        {
-            _handleCommand();
-        };
-
-        finishingStrategy = new Action(() =>
-        {
-
-        });
+        strategy = () => _handleCommand();
+        finishingStrategy = () => { };
     
         thread = new Thread(() =>
         {
-            while (!stop)
+            try
             {
-                strategy();
+                while (!stop)
+                {
+                    strategy();
+                }
+            }
+            finally
+            {
+                lock (lockObject)
+                {
+                    finishingStrategy();
+                }
             }
         });
     }
+
     internal void _stop()
     {
-        finishingStrategy();
-        stop = true;
+        lock (lockObject)
+        {
+            stop = true;
+            finishingStrategy();
+        }
     }
+
     internal void _handleCommand()
     {
-        queue.Receive().Execute();
+        try
+        {
+            queue.Receive().Execute();
+        }
+        catch (OperationCanceledException)
+        {
+            while (!queue.isEmpty())
+            {
+                try
+                {
+                    queue.Receive();
+                }
+                catch { }
+            }
+            _stop();
+        }
     }
+
     internal void _updateBehaviour(Action newBehaviour)
     {
-        strategy = newBehaviour;
+        lock (lockObject)
+        {
+            strategy = newBehaviour;
+        }
     }
+
     internal void _updateFinishingBehaviour(Action newBehaviour)
     {
-        finishingStrategy = newBehaviour;
+        lock (lockObject)
+        {
+            finishingStrategy = newBehaviour;
+        }
     }
+
     public void Start()
     {
         thread.Start();
